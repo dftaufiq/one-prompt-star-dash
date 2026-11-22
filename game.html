@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STAR DASH — built from one prompt</title>
+<style>
+  html,body{margin:0;padding:0;background:#0b0713;height:100%;overflow:hidden;
+    font-family:"Segoe UI",system-ui,sans-serif}
+  #wrap{position:relative;width:960px;height:540px;margin:0 auto;top:50%;
+    transform:translateY(-50%)}
+  canvas{display:block;width:960px;height:540px;background:#0b0713;
+    border-radius:12px;box-shadow:0 0 60px #c41c8355}
+  #hint{position:absolute;left:0;right:0;bottom:-28px;text-align:center;
+    color:#8a7f9e;font-size:13px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="hint">Arrows / WASD to fly &nbsp;·&nbsp; Collect 20 stars &nbsp;·&nbsp; Dodge the rocks &nbsp;·&nbsp; R to restart</div>
+</div>
+<script>
+"use strict";
+// STAR DASH — a tiny browser game built from ONE prompt:
+// "Build a tiny browser game: a neon spaceship flies with arrow keys,
+//  collects 20 stars to win, dodges asteroids, 3 lives, with a HUD
+//  and start / win / lose screens. One HTML file."
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+const W = 960, H = 540;
+const WIN_STARS = 20, MAX_LIVES = 3;
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+
+const game = {
+  state: "title", // title | playing | win | lose
+  stars: 0, lives: MAX_LIVES, time: 0,
+  player: { x: W / 2, y: H - 90, vx: 0, vy: 0, r: 16, inv: 0 },
+  starsList: [], rocks: [], parts: [], bg: [],
+  keys: {},
+};
+window.GAME = game; // exposed so an automated playtest can steer + assert
+
+function spawnStar() {
+  return { x: rand(40, W - 40), y: rand(50, H - 120), r: 12, tw: rand(0, 6.28), got: false };
+}
+function spawnRock() {
+  const edge = Math.floor(rand(0, 3));
+  let x, y, vx, vy;
+  if (edge === 0)      { x = rand(0, W); y = -30; vx = rand(-30, 30); vy = rand(50, 110); }
+  else if (edge === 1) { x = -30; y = rand(0, H); vx = rand(50, 110); vy = rand(-25, 25); }
+  else                 { x = W + 30; y = rand(0, H); vx = rand(-110, -50); vy = rand(-25, 25); }
+  return { x, y, vx, vy, r: rand(16, 30), rot: rand(0, 6.28), vr: rand(-1.5, 1.5) };
+}
+function reset() {
+  game.state = "playing";
+  game.stars = 0; game.lives = MAX_LIVES; game.time = 0;
+  game.player = { x: W / 2, y: H - 90, vx: 0, vy: 0, r: 16, inv: 0 };
+  game.starsList = []; for (let i = 0; i < 6; i++) game.starsList.push(spawnStar());
+  game.rocks = []; for (let i = 0; i < 4; i++) game.rocks.push(spawnRock());
+  game.parts = [];
+}
+for (let i = 0; i < 90; i++)
+  game.bg.push({ x: rand(0, W), y: rand(0, H), s: rand(0.5, 2), v: rand(4, 18) });
+
+addEventListener("keydown", (e) => {
+  game.keys[e.key.toLowerCase()] = true;
+  if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(e.key.toLowerCase())) e.preventDefault();
+  if ((e.key === "Enter" || e.key === " ") && game.state === "title") reset();
+  if ((e.key === "r" || e.key === "R") && (game.state === "win" || game.state === "lose")) reset();
+  if (e.key === "Enter" && (game.state === "win" || game.state === "lose")) reset();
+});
+addEventListener("keyup", (e) => { game.keys[e.key.toLowerCase()] = false; });
+cv.addEventListener("pointerdown", () => {
+  if (game.state === "title" || game.state === "win" || game.state === "lose") reset();
+});
+
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, 6.28), sp = rand(40, 220);
+    game.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: rand(0.3, 0.7), color });
+  }
+}
+
+function update(dt) {
+  if (game.state !== "playing") return;
+  game.time += dt;
+  const p = game.player, k = game.keys;
+  const ax = (k["arrowright"] || k["d"] ? 1 : 0) - (k["arrowleft"] || k["a"] ? 1 : 0);
+  const ay = (k["arrowdown"] || k["s"] ? 1 : 0) - (k["arrowup"] || k["w"] ? 1 : 0);
+  p.vx += ax * 1400 * dt; p.vy += ay * 1400 * dt;
+  p.vx *= Math.pow(0.12, dt); p.vy *= Math.pow(0.12, dt); // drag
+  const sp = Math.hypot(p.vx, p.vy), MAX = 340;
+  if (sp > MAX) { p.vx *= MAX / sp; p.vy *= MAX / sp; }
+  p.x = Math.max(p.r, Math.min(W - p.r, p.x + p.vx * dt));
+  p.y = Math.max(p.r, Math.min(H - p.r, p.y + p.vy * dt));
+  if (p.inv > 0) p.inv -= dt;
+
+  for (const s of game.starsList) {
+    s.tw += dt * 4;
+    if (!s.got && dist(p.x, p.y, s.x, s.y) < p.r + s.r + 4) {
+      s.got = true; game.stars++;
+      burst(s.x, s.y, "#ffd23f", 14);
+      if (game.stars >= WIN_STARS) { game.state = "win"; return; }
+      game.starsList.push(spawnStar());
+    }
+  }
+  game.starsList = game.starsList.filter((s) => !s.got);
+
+  for (const r of game.rocks) {
+    r.x += r.vx * dt; r.y += r.vy * dt; r.rot += r.vr * dt;
+    if (r.x < -50 || r.x > W + 50 || r.y < -50 || r.y > H + 50) Object.assign(r, spawnRock());
+    if (p.inv <= 0 && dist(p.x, p.y, r.x, r.y) < p.r + r.r - 6) {
+      game.lives--; p.inv = 2;
+      burst(p.x, p.y, "#ff4d6d", 22);
+      if (game.lives <= 0) { game.state = "lose"; return; }
+    }
+  }
+  if (game.time > 8 && game.rocks.length < 7 && Math.random() < dt * 0.2)
+    game.rocks.push(spawnRock());
+
+  for (const pt of game.parts) { pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.life -= dt; }
+  game.parts = game.parts.filter((pt) => pt.life > 0);
+}
+
+function drawStar(x, y, r, tw) {
+  const glow = 0.7 + 0.3 * Math.sin(tw);
+  ctx.save(); ctx.translate(x, y);
+  ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 16 * glow;
+  ctx.fillStyle = "#ffd23f";
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.45, a = (i * Math.PI) / 5 - Math.PI / 2;
+    ctx[i === 0 ? "moveTo" : "lineTo"](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function drawRock(r) {
+  ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
+  ctx.fillStyle = "#3a3348"; ctx.strokeStyle = "#8a7f9e"; ctx.lineWidth = 2;
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2, rr = r.r * (0.8 + 0.25 * Math.sin(i * 2.7));
+    ctx[i === 0 ? "moveTo" : "lineTo"](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+}
+function drawShip(p) {
+  ctx.save(); ctx.translate(p.x, p.y);
+  if (p.inv > 0 && Math.floor(p.inv * 10) % 2 === 0) ctx.globalAlpha = 0.35;
+  ctx.shadowColor = "#22d3ee"; ctx.shadowBlur = 18;
+  ctx.fillStyle = "#22d3ee";
+  ctx.beginPath();
+  ctx.moveTo(0, -20); ctx.lineTo(14, 14); ctx.lineTo(0, 7); ctx.lineTo(-14, 14);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(0, -4, 4, 0, 6.29); ctx.fill();
+  ctx.restore();
+  // engine flame
+  const f = 10 + Math.random() * 10;
+  ctx.save(); ctx.translate(p.x, p.y + 14);
+  ctx.fillStyle = "#fb923c";
+  ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(0, f); ctx.lineTo(6, 0); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawHUD() {
+  ctx.fillStyle = "#fff"; ctx.font = "bold 20px 'Segoe UI', system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("★ " + game.stars + " / " + WIN_STARS, 16, 34);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ff4d6d";
+  ctx.fillText("♥".repeat(Math.max(0, game.lives)) + "♡".repeat(Math.max(0, MAX_LIVES - game.lives)), W - 16, 34);
+  ctx.textAlign = "center"; ctx.fillStyle = "#8a7f9e"; ctx.font = "16px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(Math.floor(game.time) + "s", W / 2, 32);
+}
+function overlay(title, sub, color) {
+  ctx.fillStyle = "rgba(11,7,19,0.72)"; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.fillStyle = color;
+  ctx.font = "bold 64px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(title, W / 2, H / 2 - 20);
+  ctx.fillStyle = "#e8e2f2"; ctx.font = "22px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(sub, W / 2, H / 2 + 30);
+}
+function draw() {
+  ctx.fillStyle = "#0b0713"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff";
+  for (const b of game.bg) {
+    b.y += b.v * 0.016; if (b.y > H) b.y = 0;
+    ctx.globalAlpha = 0.25 + b.s * 0.25; ctx.fillRect(b.x, b.y, b.s, b.s);
+  }
+  ctx.globalAlpha = 1;
+  for (const s of game.starsList) drawStar(s.x, s.y, s.r, s.tw);
+  for (const r of game.rocks) drawRock(r);
+  for (const pt of game.parts) {
+    ctx.globalAlpha = Math.max(0, pt.life * 2);
+    ctx.fillStyle = pt.color; ctx.fillRect(pt.x - 2, pt.y - 2, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+  if (game.state === "playing" || game.state === "win" || game.state === "lose")
+    drawShip(game.player);
+  if (game.state === "playing") drawHUD();
+  if (game.state === "title")
+    overlay("★ STAR DASH ★", "Collect 20 stars. Dodge the rocks.  Press ENTER to fly", "#22d3ee");
+  if (game.state === "win")
+    overlay("YOU WIN!", "20 stars collected in " + Math.floor(game.time) + "s — press R to fly again", "#ffd23f");
+  if (game.state === "lose")
+    overlay("GAME OVER", game.stars + " stars collected — press R to try again", "#ff4d6d");
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
